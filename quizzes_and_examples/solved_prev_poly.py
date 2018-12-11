@@ -16,8 +16,8 @@ binary_warped = rgb2gray( rgb_read(DATA_DIR + 'warped-example.jpg') )
 #%%
 # Polynomial fit values from the previous frame
 # Make sure to grab the actual values from the previous step in your project!
-left_fit = np.array([ 2.13935315e-04, -3.77507980e-01,  4.76902175e+02])
-right_fit = np.array([4.17622148e-04, -4.93848953e-01,  1.11806170e+03])
+#left_fit = np.array([ 2.13935315e-04, -3.77507980e-01,  4.76902175e+02])
+#right_fit = np.array([4.17622148e-04, -4.93848953e-01,  1.11806170e+03])
 
 def fit_poly(img_shape, leftx, lefty, rightx, righty):
     ### TO-DO: Fit a second order polynomial to each with np.polyfit() ###
@@ -31,7 +31,7 @@ def fit_poly(img_shape, leftx, lefty, rightx, righty):
 
     return left_fitx, right_fitx, ploty
 
-def search_around_poly(binary_warped):
+def search_around_poly(binary_warped, left_fit, right_fit ):
     # HYPERPARAMETER
     # Choose the width of the margin around the previous polynomial to search
     # The quiz grader expects 100 here, but feel free to tune on your own!

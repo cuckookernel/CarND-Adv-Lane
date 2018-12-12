@@ -92,6 +92,36 @@ def frames_generator( video_fname ) :
     cap.release()
 
 
+def enumerated_frames_gen( video_fname, start=0, end=None ) :
+    """Returns a generator that yields succesive frames from a video
+    in BGR format! """
+    if not os.path.exists( video_fname ) :
+        raise RuntimeError( "File not found: " + video_fname )
+
+    cap = cv2.VideoCapture( video_fname )
+
+    i = 0
+    while cap.isOpened() :
+        # Capture frame-by-frame
+        if end is not None  and i >= end:
+            cap.release()
+            return #raise StopIteration()
+
+        ret, frame = cap.read()
+
+        if not ret :
+            return #raise StopIteration( "No more frames?" )
+            #raise RuntimeError( "Opened but no frame... Go figure...")
+
+        if i >= start:
+            yield (i, frame)
+
+        i += 1
+
+    # When everything done, release the video capture object
+    cap.release()
+
+
 def np_describe( np_arr, detail=0 )  :
     if detail == 0 :
         return { "shape" : np_arr.shape,
@@ -113,3 +143,13 @@ def np_describe( np_arr, detail=0 )  :
                 "owndata" : np_arr.flags.owndata,
                 "strides"  : np_arr.strides
          }
+
+
+def test()  :
+    #%%
+    for i in range( 0, None )  :
+        print( i )
+
+        if i > 10 :
+            break
+    #%%

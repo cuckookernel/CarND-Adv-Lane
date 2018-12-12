@@ -4,10 +4,49 @@ Created on Fri Dec  7 15:49:04 2018
 
 @author: mrestrepo
 """
+import time
 import cv2
 import numpy as np
 
 import util as u
+import matplotlib.pyplot as plt
+
+def calibrate_cam( img_filenames, nx, ny, draw=-1 ) :
+    """Perform camera calibration via cv2.findChessboardCorners
+    from a bunch of images stored in the paths contained in the list img_filenames.
+
+    Return the camera matrix and the distortion coefficients
+    """
+    imgpoints = []
+    objpoints = []
+
+    objp = np.zeros( (nx*ny, 3), dtype=np.float32)
+    objp[:,:2] = np.mgrid[0:nx, 0:ny].T.reshape(-1,2)
+
+
+    for i, fname in enumerate( img_filenames )  :
+        img = u.rgb_read( fname )
+        gray = u.rgb2gray( img )
+
+        ret, corners = cv2.findChessboardCorners(gray, (nx,ny), None)
+
+        if draw == i :
+            cv2.drawChessboardCorners(img, (nx,ny), corners, ret)
+            plt.imshow( img )
+
+        if ret == True :
+            imgpoints.append( corners )
+            objpoints.append( objp )
+
+        print( f"img_filename = {fname} ret={ret} len(corners)={len(corners) if corners is not None else 0}"
+               f" len(imgpoints)={len(imgpoints)}" )
+
+
+    #perform calibration
+    ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera( objpoints, imgpoints, gray.shape[::-1], None, None)
+
+    return mtx, dist
+
 
 def get_lane_pixels( rgb_correct ) :
     """Take a (perspective corrected) image and produce a binary image
@@ -267,16 +306,19 @@ def fit_new_polys(bin_warp, left_fit, right_fit, margin=100 ):
     return left_fit, right_fit
 
 
-def draw_search_windows( bin_warp, left_fit, right_fit, margin ) : #,  left_lane_inds, right_lane_inds,   ) :
+def draw_search_windows( bin_warp, left_fit, right_fit, margin,  background=None) : #,  left_lane_inds, right_lane_inds,   ) :
 ## Visualization ##
     # Create an image to draw on and an image to show the selection window
     # out_img = np.dstack((binary_warped, binary_warped, binary_warped))*255
-    out_img = u.binary2rgb( bin_warp )
-    window_img = np.zeros_like(out_img)
+    if background is None :
+        background = u.binary2rgb( bin_warp )
+
+    window_img = np.zeros_like(background)
 
     img_h = bin_warp.shape[0]
 
     nonzeroy, nonzerox = bin_warp.nonzero()
+
     # Color in left and right line pixels
 
     # out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]
@@ -301,11 +343,148 @@ def draw_search_windows( bin_warp, left_fit, right_fit, margin ) : #,  left_lane
     # Draw the lane onto the warped blank image
     cv2.fillPoly(window_img, np.int_([left_line_pts]), (0,255, 0))
     cv2.fillPoly(window_img, np.int_([right_line_pts]), (0,255, 0))
-    result = cv2.addWeighted(out_img, 1, window_img, 0.3, 0)
+
+    result = cv2.addWeighted(background, 1, window_img, 0.3, 0)
 
     # Plot the polynomial lines onto the image
     #plt.plot(left_fitx , ploty, color='yellow')
     #plt.plot(right_fitx, ploty, color='yellow')
     ## End visualization steps ##
     return result
+
+
+def pipeline_on_video( video_path,  params,
+                       start_frame=0,
+                       end_frame=None,
+                       out_video_path = None,
+                       out_fps = 25)  :
+
+    if out_video_path :
+        out = cv2.VideoWriter( out_video_path,
+                               cv2.VideoWriter_fourcc('M','J','P','G'),
+                               out_fps,  # fps : frames per second
+                               params["out_size_wh"] )
+        print( "Writing video to: " + out_video_path )
+    else:
+        out = None
+
+    frame_n = 0
+
+    mx, my = params["xm_per_pix"], params["ym_per_pix"]
+
+    try :
+        fits = None
+        t0 = time.clock()
+        for i, frame in u.enumerated_frames_gen( video_path,
+                                                 start=start_frame,
+                                                 end=end_frame ) :
+            out_img, fits = pipeline_on_img( frame, params, fits=fits )
+
+            yvalue_pix = out_img.shape[0]
+
+
+            left_R_curve_m = get_curvature_real_meters( fits[0], mx, my, yvalue_pix )
+            right_R_curve_m = get_curvature_real_meters( fits[1], mx, my, yvalue_pix )
+
+            print( f"left_R_curve_m = {left_R_curve_m:.2f} m "
+                   f"right_R_curve_m = {right_R_curve_m:.2f} m" )
+
+            if out :
+                assert len(out_img.shape) == 3, f"out_img.shape={out_img.shape}"
+                out.write( cv2.resize( out_img, params["out_size_wh"] ) )
+
+            frame_n = i-start_frame + 1
+            print(f"frame {frame_n} / {end_frame-start_frame} ", end="\r")
+
+
+    finally :
+        out.release()
+
+    t1 = time.clock()
+    print( f"{frame_n} frames written in {t1 -t0:.2f} seconds {frame_n/(t1-t0):.2f} fps ) ")
+
+
+def pipeline_on_img( frame, params, fits =None ) :
+
+        mtx, dist, persp_M, persp_M_inv = ( params["cam_mtx"], params["cam_dist"],
+                                            params["persp_M"], params["persp_M_inv"] )
+
+        window_width, window_height, margin = ( params["window_width"],
+                                                params["window_height"],
+                                                params["margin"] )
+
+        distorted = u.bgr2rgb( frame )
+        undistorted = cv2.undistort(distorted, mtx, dist, None, mtx)
+        del distorted
+        warped = warp_perspective(undistorted,  persp_M )
+        lane_pixels0 = get_lane_pixels( undistorted )
+
+        bin_gray = u.binary2gray( lane_pixels0  )
+
+        warp_bin = warp_perspective( bin_gray, persp_M )
+
+        if fits is None :
+            # Hard work for frame 0...
+            c, left_lane, right_lane = sliding_window_search(warp_bin,
+                                                             win_w=window_width,
+                                                             win_h=window_height,
+                                                             margin=margin)
+
+            left_fit, right_fit = fit_polys0( left_lane, right_lane )
+            #print( img_idx , left_fit, right_fit )
+
+        else : # for frame # >= 1, use previous fit and function that search in a window around it
+            left_fit, right_fit = fits
+            left_fit, right_fit = fit_new_polys( warp_bin, left_fit, right_fit, margin=margin )
+            #print( img_idx, left_fit, right_fit )
+
+        img = draw_search_windows( warp_bin, left_fit, right_fit, margin, background = warped )
+
+        und1 = unwarp_combine(  img, persp_M_inv, undistorted, inplace=True )
+
+        return und1, (left_fit, right_fit)
+
+
+def unwarp_combine( warped, M_inv, undistorted, inplace=False ) :
+
+    if inplace :
+        und1 = undistorted
+    else :
+        und1 = undistorted.copy()
+
+    unwarp = cv2.warpPerspective(warped, M_inv,
+                               dsize= (und1.shape[1], und1.shape[0]),
+                               flags=cv2.INTER_LINEAR)
+
+    mask = (unwarp[...,0] != 0) & (unwarp[...,1] != 0) & (unwarp[...,2] != 0)
+
+    und1[mask] = unwarp[mask]
+
+    return und1
+
+
+def get_curvature_real_meters( fit_in_pixel_space, mx, my, yvalue_pix ) :
+    """Compute the a fit's radius  of curvature
+    with the formula  in Lesson 7 : Section 7 but
+    assuming the coefficients a, b,c that come in the fits are scaled according
+    to mx = xm_per_pix  and my = ym_per_pix
+
+    That is if, in pixel space:  x = a * y**2 + b * y + c
+    and X = x *  mx , Y = y * my  are the corresponding coordinates in real space
+
+    we have: X = mx/(my ** 2) * a * (Y**2) + (mx/my) * b * Y + (mx * c)
+
+    This means that, in real
+        X = A * (Y ** 2) + B * y + C
+
+    with A := mx / (my ** 2) * a , and
+         B := mx / my * b
+
+    """
+
+    a , b, _ =  fit_in_pixel_space  # c is ignored...
+    A , B  = ( mx / my ** 2 ) * a,  ( mx / my ) * b
+    yvalue_m = yvalue_pix * my
+
+    return ( 1 + (2 * A * yvalue_m + B)**2 ) ** 1.5 / abs( 2 * A )
 

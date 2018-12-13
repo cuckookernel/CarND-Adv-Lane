@@ -30,6 +30,9 @@ def rgb_read( path ) :
 def bgr2rgb( bgr_img ) :
     return cv2.cvtColor( bgr_img, cv2.COLOR_BGR2RGB )
 
+def rgb2bgr( bgr_img ) :
+    return cv2.cvtColor( bgr_img, cv2.COLOR_RGB2BGR )
+
 def rgb2gray( rgb_img ) :
     return cv2.cvtColor( rgb_img, cv2.COLOR_RGB2GRAY )
 
@@ -114,7 +117,7 @@ def enumerated_frames_gen( video_fname, start=0, end=None ) :
             #raise RuntimeError( "Opened but no frame... Go figure...")
 
         if i >= start:
-            yield (i, frame)
+            yield (i - start, frame)
 
         i += 1
 

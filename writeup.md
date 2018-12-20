@@ -24,7 +24,7 @@ The goals / steps of this project are the following:
 [image3]: ./examples/lanes_binary.png "Binary Example"
 [image4]: ./examples/warped_road.png "Warp Example"
 [image5]: ./examples/fit_after_window_search.png "Fit Visual"
-[image6]: ./examples/road_image_w_lanes.png "Output"
+[image6]: ./examples/road_with_lane.png "Output"
 [video1]: ./project_video.mp4 "Video"
 
 ## [Rubric](https://review.udacity.com/#!/rubrics/571/view) Points
@@ -131,10 +131,10 @@ The transformation is done following the observation. See the function's docstri
 
 #### 6. Provide an example image of your result plotted back down onto the road such that the lane area is identified clearly.
 
-The function `draw_search_windows` (line 416) takes a warped binary image of the road along with computed fits and margins 
-draws search stripes around the lanes 
+The function `draw_lane` (line 560) takes a warped binary image of the road along with computed fits and margins 
+draws the lane area on the road.
 This function is called at the end of `pipeline_on_bgr_img` (line 159) which integrates all steps above in a single function.
-After calling it we unwarp and fuse the result with original image . 
+After calling it we unwarp and fuse the result with original image. 
 Here is an example: 
 
 ![alt text][image6]
@@ -145,7 +145,7 @@ Here is an example:
 
 #### 1. Provide a link to your final video output.  Your pipeline should perform reasonably well on the entire project video (wobbly lines are ok but no catastrophic failures that would cause the car to drive off the road!).
 
-Here's a [link to my video result](https://www.youtube.com/watch?v=UE4Oj_0wbXk&feature=youtu.be)
+Here's a [link to my video result](https://www.youtube.com/watch?v=JE1Mpy8TfY0)
 
 ---
 

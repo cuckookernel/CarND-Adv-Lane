@@ -35,18 +35,19 @@ def pipeline_on_video( in_video_path, out_video_path, params, start_frame, end_f
         video_writer.release()
 
 
+
 def pipeline_on_many( frame_generator,  params, video_writer = None )  :
 
     tm0 = time.clock()
-    state = { "R_smooth" : EMASmoothener(alpha=0.05),
-              "fits"  : None,
-              "frame_i" : 0,
-              "left_smooth"  : EMASmoothener(alpha=0.1),
-              "right_smooth" : EMASmoothener(alpha=0.1) }
+
+    detector = StableLaneDetector()
 
     for frame_i, frame_in in frame_generator :
-        state["frame_i"] = frame_i
-        frame_out = proc_one_frame( frame_in, params,  state  )
+        detector.frame_i = frame_i
+        if frame_i == 0 :
+            params["y_range"] = np.arange(0, frame_in.shape[0] )
+
+        frame_out = detector.proc_one_frame( frame_in, params  )
 
         if video_writer :
            #assert len(out_img.shape) == 3, f"out_img.shape={out_img.shape}"
@@ -54,8 +55,90 @@ def pipeline_on_many( frame_generator,  params, video_writer = None )  :
            video_writer.write( bgr_out )
     tm1 = time.clock()
 
-    print( f"{ state['frame_i'] } frames written in {tm1 -tm0:.2f} seconds "
-           f"{ state['frame_i'] / (tm1 - tm0):.2f} fps ) ")
+    print( f"\n{ detector.frame_i } frames written in {tm1 -tm0:.2f} seconds "
+           f"( { detector.frame_i / (tm1 - tm0):.2f} fps ) ")
+
+
+class StableLaneDetector() :
+    def __init__( self ) :
+        self.R_smooth = EMASmoothener(alpha=0.05)
+        self.fits = None
+        self.fitxs = None
+        self.frame_i = 0
+        #self.left_smooth = EMASmoothener(alpha=0.1)
+        #self.right_smooth = EMASmoothener(alpha=0.1)
+
+    def proc_one_frame( self, frame, params  ) :
+        """Apply pipeline to one frame and write and output image with annotations"""
+
+        out_img, fits, fitxs, err_msg = pipeline_on_bgr_img( frame, params,
+                                                             fits=self.fits,
+                                                             fitxs=self.fitxs,
+                                                             draw="lane" )
+
+        yvalue_pix = frame.shape[0]
+
+        if self.fits and fits :
+            self.update_fits_with_sanity( fits, fitxs, params, yvalue_pix)
+        elif fits:
+            self.fits, self.fitxs = fits, fitxs
+        else :
+            print( f"frame {self.frame_i} : error: {err_msg}")
+            return out_img
+
+        smoothened_curve = self.R_smooth.get()
+
+        m_x = 3.7 / (  self.fitxs[1][-1] - self.fitxs[0][-1] )
+        car_x_offset = m_x * get_offset_pix( self.fits, yvalue_pix, out_img.shape[1] / 2 )
+
+        cv2.putText( out_img,  f"Frame: {self.frame_i} smoothened radius of curvature: " +
+                     f"{smoothened_curve:.0f} m",
+                     (50,50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,255,0), thickness=2 )
+
+        cv2.putText( out_img, f"car horiz. offset: {car_x_offset:.2f} m",
+                     (50,100), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,255,0), thickness=2 )
+
+        return out_img
+
+    def update_fits_with_sanity( self, fits, fitxs, params, yvalue_pix) :
+        #Update the fits cache here...
+        # First sanity test L1 norm of lane hasn't changed too much
+        # (following grader suggestion)
+        threshold = params["sane_update_threshold"]
+        tmp_fit_l, tmp_fitx_l, upd_l = sane_fit_update_L1( self.fits[0], self.fitxs[0],
+                                                           fits[0], fitxs[0], threshold )
+        tmp_fit_r, tmp_fitx_r, upd_r = sane_fit_update_L1( self.fits[1], self.fitxs[1],
+                                                           fits[1], fitxs[1], threshold )
+
+        self.R_smooth.update( calc_curvature( (tmp_fit_l, tmp_fit_r),
+                                              (tmp_fitx_l, tmp_fitx_r),
+                                              params["ym_per_pix"], yvalue_pix ) )
+
+        if self.frame_i % 10 == 0 :
+            print( f"frame: {self.frame_i}  upd_l = {upd_l} upd_r = {upd_r}" )
+# =============================================================================
+#                    f"tmp_left_r_curve_m  = {tmp_left_r_curve_m:.2f} m "
+#                    f"tmp_right_r_curve_m  = {tmp_right_r_curve_m:.2f} m "
+#                    f"left_r_curve_m  = {left_r_curve_m:.2f} m "
+#                    f"right_r_curve_m = {right_r_curve_m:.2f} m         ", end="\n" )
+#
+# =============================================================================
+
+def calc_curvature( fits, fitxs, m_y, yvalue_pix ) :
+    m_x = 3.7 / (  fitxs[1][-1] - fitxs[0][-1] )
+    left_r_curve_m  = get_curvature_real_meters( fits[0], m_x, m_y, yvalue_pix )
+    right_r_curve_m = get_curvature_real_meters( fits[1], m_x, m_y, yvalue_pix )
+    r_curve = 0.5 * (left_r_curve_m + right_r_curve_m)
+
+    return r_curve
+
+#def curvatures_ok( fits, params, yvalue_pix ) :
+#    m_y = params["ym_per_pix"]
+#
+#    m_x = 3.7 / 700 # value of mx doesn't matter to just check curvature ratio
+#    left_r_curve_m  = get_curvature_real_meters( fits[0], m_x, m_y, yvalue_pix )
+#    right_r_curve_m = get_curvature_real_meters( fits[1], m_x, m_y, yvalue_pix )
+#    return 2.0 > left_r_curve_m / right_r_curve_m > 0.5
 
 
 class EMASmoothener :
@@ -75,7 +158,10 @@ class EMASmoothener :
 
     def get( self ) :
         """Get smoothened value"""
-        return self.value
+        if self.value :
+            return self.value
+        else :
+            return float("nan")
 
 
 def calibrate_cam( img_filenames, n_x, n_y, draw=-1 ) :
@@ -98,7 +184,7 @@ def calibrate_cam( img_filenames, n_x, n_y, draw=-1 ) :
         ret, corners = cv2.findChessboardCorners(u.rgb2gray( img ), (n_x,n_y), None)
 
         if draw == i :
-            cv2.drawChessboardCorners(img, (n_x,n_y), corners, ret)
+            cv2.drawChessboardCorners(img, (n_x, n_y), corners, ret)
             plt.imshow( img )
 
         if ret :
@@ -114,39 +200,18 @@ def calibrate_cam( img_filenames, n_x, n_y, draw=-1 ) :
 
     return mtx, dist
 
-def proc_one_frame(  frame, params, state  ) :
-    """Apply pipeline to one frame and write and output image with annotations"""
 
-    out_img, fits = pipeline_on_bgr_img( frame, params, fits=state["fits"] )
-    state["fits"] = fits
 
-    yvalue_pix = out_img.shape[0]
+def sane_fit_update_L1( sane_fit, sane_fitx, new_fit, new_fitx, threshold ) :
+    l1_diff = np.average( np.abs(sane_fitx - new_fitx) )
+    # print( f"l1_diff = {l1_diff:.2f}")
+    test_ok = l1_diff <= threshold
+    if test_ok :
+        return new_fit, new_fitx, True
+    else:
+        return sane_fit, sane_fitx, False
 
-    m_x, m_y = params["xm_per_pix"], params["ym_per_pix"]
-
-    left_r_curve_m  = get_curvature_real_meters( fits[0], m_x, m_y, yvalue_pix )
-    right_r_curve_m = get_curvature_real_meters( fits[1], m_x, m_y, yvalue_pix )
-
-    if state['frame_i'] % 10 == 0 :
-        print( f"frame: {state['frame_i']}  left_r_curve_m  = {left_r_curve_m:.2f} m "
-               f"right_r_curve_m = {right_r_curve_m:.2f} m", end="\r" )
-
-    r_curve = 0.5 * (left_r_curve_m + right_r_curve_m)
-
-    state["R_smooth"].update( r_curve )
-    smoothened_curve = state["R_smooth"].get()
-
-    car_x_offset = m_x * get_offset_pix( fits, yvalue_pix, out_img.shape[1] / 2 )
-
-    cv2.putText( out_img, f"Frame: {state['frame_i']:4d} smoothened radius of curvature: "
-                 f"{smoothened_curve:.0f} m",
-                 (50,50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,255,0), thickness=2 )
-
-    cv2.putText( out_img, f"car horiz. offset: {car_x_offset:.2f} m",
-                 (50,100), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,255,0), thickness=2 )
-
-    return out_img
-
+    #return new_left_fitx, new_right_fitx
 
 def get_offset_pix( fits, yvalue_pix, x_mid_pix ) :
 
@@ -155,42 +220,78 @@ def get_offset_pix( fits, yvalue_pix, x_mid_pix ) :
 
     return x_mid_pix - 0.5 *( left_xvalue + right_xvalue )
 
+def pipeline_on_bgr_img( frame, params, fits, fitxs, draw="search_windows"):
 
-def pipeline_on_bgr_img( frame, params, fits =None ) :
-    """Apply the whole pipeline to a single image"""
+    mtx, dist, persp_m = ( params["cam_mtx"], params["cam_dist"],
+                                        params["persp_M"], )
 
-    mtx, dist, persp_m, persp_m_inv = ( params["cam_mtx"], params["cam_dist"],
-                                        params["persp_M"], params["persp_M_inv"] )
+
+    warped_rgb, undistorted, lane_pixels = get_lane_pixels_bgr( frame, mtx, dist, persp_m )
+    bin_gray = u.binary2gray( lane_pixels  )
+
+    warp_bin = warp_perspective( bin_gray, persp_m )
+
+    new_fits, new_fitxs, err_msg = detect_on_warp_bin( warp_bin, params, fitxs=fitxs )
+
+    if new_fits : # detection ok
+        fits  = new_fits
+        fitxs = new_fitxs
+
+    if fits :
+        persp_m_inv = params["persp_M_inv"]
+
+        if draw == "search_windows" :
+            margin = params["margin"]
+            img_rgb = draw_search_windows( warp_bin, fits[0], fits[1], margin, background = warped_rgb )
+        elif draw == "lane" :
+            img_rgb = draw_lane( warp_bin, fits[0], fits[1], background = warped_rgb )
+
+        und1 = unwarp_combine( img_rgb, persp_m_inv, undistorted, inplace=True )
+
+        return und1, fits,  fitxs, err_msg
+        #return { "und1": und1, "warp_bin" :  warp_bin,
+        #         "fits" : fits, "fitxs" : fitxs, "err_msg" : err_msg }
+    else :
+        return undistorted, fits, fitxs, err_msg
+        #return { "und1": undistorted, "warp_bin" : warp_bin,
+        #         "fits" : fits, "fitxs" : fitxs, "err_msg" : err_msg }
+
+
+def detect_on_warp_bin( warp_bin, params, fitxs=None ) :
+    """Apply the whole pipeline to a single image only
+    return fits that satisfy curvature criterion"""
 
     window_width, window_height, margin = ( params["window_width"],
                                             params["window_height"],
                                             params["margin"] )
 
-    warped_rgb, undistorted,  lane_pixels = get_lane_pixels_bgr( frame, mtx, dist, persp_m )
-    bin_gray = u.binary2gray( lane_pixels  )
-
-    warp_bin = warp_perspective( bin_gray, persp_m )
-
-    if fits is None :
+    if fitxs is None :
         # Hard work for frame 0...
         _ , left_lane, right_lane = sliding_window_search(warp_bin,
                                                           win_w=window_width,
                                                           win_h=window_height,
                                                           margin=margin)
 
-        left_fit, right_fit = fit_polys0( left_lane, right_lane )
-        #print( img_idx , left_fit, right_fit )
+        fits, fitxs = fit_polys0( left_lane, right_lane, params["y_range"] )
 
     else : # for frame # >= 1, use previous fit and function that search in a window around it
-        left_fit, right_fit = fits
-        left_fit, right_fit = fit_new_polys( warp_bin, left_fit, right_fit, margin=margin )
-        #print( img_idx, left_fit, right_fit )
+        left_fitx, right_fitx = fitxs
+        fits, fitxs = fit_new_polys_v2( warp_bin, left_fitx, right_fitx,
+                                        params["y_range"], margin=margin )
 
-    img_rgb = draw_search_windows( warp_bin, left_fit, right_fit, margin, background = warped_rgb )
+    #  Second Sanity Test (Following grader sugestion )
+    m_y = params["ym_per_pix"]
+    m_x = 3.7 / (fitxs[1][-1] - fitxs[0][-1])
+    yvalue_pix = warp_bin.shape[0]
 
-    und1 = unwarp_combine( img_rgb, persp_m_inv, undistorted, inplace=True )
+    left_r_curve_m  = get_curvature_real_meters( fits[0], m_x, m_y, yvalue_pix )
+    right_r_curve_m = get_curvature_real_meters( fits[1], m_x, m_y, yvalue_pix )
 
-    return und1, (left_fit, right_fit)
+    if not( 2.0 > left_r_curve_m / right_r_curve_m > 0.5 ) :
+        err_msg = f"failed curvature test: {left_r_curve_m:.1f} {right_r_curve_m}  "
+        return  None, None, err_msg  # lane finding failed curvature test
+    else :
+        return fits, fitxs, None
 
 
 def get_lane_pixels_bgr( frame, mtx, dist, persp_m ) :
@@ -369,18 +470,21 @@ def put_points_level( ret_left, ret_right, warped, h_win_w, win_h,
 
 
 
-def fit_polys0( left_lane, right_lane ) :
+def fit_polys0( left_lane_img, right_lane_img, y_range ) :
     """Fit polinomials given separate left_lane and right_lane binary images """
-    lefty, leftx   = left_lane .nonzero()
-    righty, rightx = right_lane.nonzero()
+    lefty, leftx   = left_lane_img.nonzero()
+    righty, rightx = right_lane_img.nonzero()
 
     left_fit  = np.polyfit( lefty,  leftx,  deg=2 )
     right_fit = np.polyfit( righty, rightx, deg=2 )
 
-    return left_fit, right_fit
+    left_fitx  = np.polyval( left_fit,  y_range )
+    right_fitx = np.polyval( right_fit, y_range )
+
+    return (left_fit, right_fit), (left_fitx, right_fitx)
 
 
-def fit_new_polys(bin_warp, left_fit, right_fit, margin=100 ):
+def fit_new_polys_v2(bin_warp, left_fitx, right_fitx, y_range, margin=100 ):
     """Fit new polynomials using left and right fit to draw window
     search stripes """
     # HYPERPARAMETER
@@ -392,8 +496,10 @@ def fit_new_polys(bin_warp, left_fit, right_fit, margin=100 ):
 
     #yvals =  np.linspace(0, img_h - 1, img_h) # previously was nonzeroy....!
 
-    left_curve  = np.polyval( left_fit , nonzeroy )
-    right_curve = np.polyval( right_fit, nonzeroy )
+    #left_curve  = np.polyval( left_fit , nonzeroy )
+    #right_curve = np.polyval( right_fit, nonzeroy )
+    left_curve = left_fitx[ nonzeroy ]
+    right_curve = right_fitx[ nonzeroy ]
 
     left_lane_inds  = ( (nonzerox < left_curve  + margin) &
                         ( nonzerox >= left_curve  - margin ) ).nonzero()[0]
@@ -410,7 +516,10 @@ def fit_new_polys(bin_warp, left_fit, right_fit, margin=100 ):
     left_fit  = np.polyfit( lefty,  leftx,  deg=2 )
     right_fit = np.polyfit( righty, rightx, deg=2 )
 
-    return left_fit, right_fit
+    left_fitx = np.polyval( left_fit, y_range )
+    right_fitx = np.polyval( right_fit, y_range )
+
+    return  (left_fit, right_fit), (left_fitx, right_fitx)
 
 
 def draw_search_windows( bin_warp, left_fit, right_fit, margin,  background=None) :
@@ -425,13 +534,7 @@ def draw_search_windows( bin_warp, left_fit, right_fit, margin,  background=None
 
     img_h = bin_warp.shape[0]
 
-    #nonzeroy, nonzerox = bin_warp.nonzero()
-    # Color in left and right line pixels
-    # out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]
-    # out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]
-
     ploty = np.linspace(0, img_h - 1, img_h )
-    ### TO-DO: Calc both polynomials using ploty, left_fit and right_fit ###
      # left_fit[0] + left_fit[1] * ploty + left_fit[2] * ploty**2
     left_fitx  = np.polyval( left_fit, ploty )
     right_fitx = np.polyval( right_fit, ploty )
@@ -451,11 +554,37 @@ def draw_search_windows( bin_warp, left_fit, right_fit, margin,  background=None
 
     result = cv2.addWeighted(background, 1, window_img, 0.3, 0)
 
-    # Plot the polynomial lines onto the image
-    #plt.plot(left_fitx , ploty, color='yellow')
-    #plt.plot(right_fitx, ploty, color='yellow')
-    ## End visualization steps ##
     return result
+
+
+def draw_lane( bin_warp, left_fit, right_fit,  background=None) :
+
+    """ Visualization ##
+     Create an image to draw on and an image to show the selection window
+    """
+    if background is None :
+        background = u.binary2rgb( bin_warp )
+
+    window_img = np.zeros_like(background)
+
+    img_h = bin_warp.shape[0]
+
+    ploty = np.linspace(0, img_h - 1, img_h )
+
+    left_fitx  = np.polyval( left_fit, ploty )
+    right_fitx = np.polyval( right_fit, ploty )
+
+    left_line = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
+    right_line = np.array([ np.flipud( np.transpose(np.vstack([right_fitx, ploty]))) ])
+
+    line_pts = np.hstack((left_line, right_line))
+
+    cv2.fillPoly(window_img, np.int_([line_pts]), (0,255, 0))
+
+    result = cv2.addWeighted(background, 1, window_img, 0.3, 0)
+
+    return result
+
 
 
 def unwarp_combine( img0, mat_inv, undistorted, inplace=False ) :

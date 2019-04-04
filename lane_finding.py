@@ -558,7 +558,6 @@ def draw_search_windows( bin_warp, left_fit, right_fit, margin,  background=None
 
 
 def draw_lane( bin_warp, left_fit, right_fit,  background=None) :
-
     """ Visualization ##
      Create an image to draw on and an image to show the selection window
     """
